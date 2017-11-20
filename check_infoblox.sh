@@ -11,6 +11,7 @@
 # 20151021  (Back to the Future Day!) Public release                       #
 # 20151030  Added check dhcpstat (by Chris Lewis)                          #
 # 20151104  Bugfix in perfdata of dnsstat check                            #
+# 20171120  Enable SNMPv3 configuration
 ############################################################################
 # Variable Declaration
 STATE_OK=0              # define the exit code if status is OK
@@ -24,18 +25,26 @@ help() {
 echo -ne "
 check_infoblox (c) 2015-$(date +%Y) Claudio Kuenzler (published under GPLv2 licence)
 
-Usage: ./check_infoblox -H host -V 2c -C community -t type [-a argument] [-w warning] [-c critical]
+Usage:
+SNMPv2c: ./check_infoblox -H host -V 2c -C community -t type [-a argument] [-w warning] [-c critical]
+SNMPv3 : ./check_infoblox -H host -V 3 -l {login} -b SHA -B {auth_pass} -x AES -X {priv_pass} -t type [-a argument] [-w warning] [-c critical]
 
 Options:
 ------------
 -H Hostname
--V SNMP Version to use (currently only 2c is supported)
+-V SNMP Version to use (currently only 2c|3 is supported)
 -C SNMP Community (default: public)
 -t Type to check
--a Additional arguments for certain checks
+-r Additional arguments for certain checks
 -w Warning Threshold (optional)
 -c Critical Threshold (optional)
 -i Ignore Unknown Status (for 'replication' and 'dnsstat' checks)
+-a Authentication Protocol (MD5|SHA) for SNMPv3
+-A Authentication Passwort for SNMPv3
+-x Privacy Protocol (DES|AES) for SNMPv3
+-X Privacy Passwort for SNMPv3
+-l Login User for SNMPv3
+
 -h This help text
 
 Check Types:
@@ -62,17 +71,22 @@ exit ${STATE_UNKNOWN}
 if [[ "$1" = "--help" ]] || [[ ${#} -eq 0 ]]; then help; fi
 
 # Get Opts
-while getopts "H:V:C:t:a:w:c:ih" Input;
+while getopts "H:V:C:t:r:w:c:ia:A:x:X:l:h" Input;
 do
   case ${Input} in
     H) host=${OPTARG};;
     V) snmpv=${OPTARG};;
     C) snmpc=${OPTARG};;
     t) checktype=${OPTARG};;
-    a) addarg=${OPTARG};;
+    r) addarg=${OPTARG};;
     w) warning=${OPTARG};;
     c) critical=${OPTARG};;
     i) ignoreunknown=true;;
+    a) authproto=${OPTARG};;
+    A) authpass=${OPTARG};;
+    x) privproto=${OPTARG};;
+    X) privpass=${OPTARG};;
+    l) login=${OPTARG};;
     h) help;;
     *) echo "Wrong option given. Use -h to check out help."; exit ${STATE_UNKNOWN};;
 
@@ -90,37 +104,47 @@ for cmd in snmpwalk awk grep egrep sed; do
 done
 
 # Check for required opts
-if [[ -z $host ]] || [[ -z $snmpv ]] || [[ -z $snmpc ]] || [[ -z $checktype ]]
+if [[ -z $host ]] || [[ -z $snmpv ]] || [[ -z $checktype ]]
 then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}
 fi
 
-# Currently only snmp version 2c is allowed
-if [[ "$snmpv" != "2c" ]]; then echo "UNKNOWN - Sorry, only snmp version 2c allowed for now"; exit ${STATE_UNKNOWN}; fi
-
-# Manually set snmpv to 2c if not set
-if [[ -z $snmpv ]]; then snmpv="2c"; fi
-
-# Default snmp community is public if not set
-if [[ -z $snmpc ]]; then snmpc="public"; fi
+# Check snmp version and build parameter string
+case "$snmpv" in
+  "2c")
+    if [[ -z $snmpc ]]; then snmpc="public"; fi
+    snmp_param="-v ${snmpv} -c ${snmpc}"
+    ;;
+  "3")
+    if [[ -z $login ]]; then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
+    if [[ -z $authproto ]]; then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
+    if [[ -z $authpass ]]; then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
+    if [[ -z $privproto ]]; then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
+    if [[ -z $privpass ]]; then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
+    snmp_param="-v ${snmpv} -l ${login} -a ${authproto} -A ${authpass} -x ${privproto} -X ${privpass}"
+    ;;
+  "*")
+    echo "UNKNOWN - Sorry, snmp version 2c|3 allowed"; exit ${STATE_UNKNOWN};
+    ;;
+esac
 
 # SNMP Connection check (also being used to get sysName)
-systemname=$(snmpwalk -v ${snmpv} -Oqv -c ${snmpc} ${host} 1.3.6.1.2.1.1.5 2>/dev/null)
+systemname=$(snmpwalk ${snmp_param} -Oqv ${host} 1.3.6.1.2.1.1.5 2>/dev/null)
 if [[ $? -gt 0 ]]; then echo "UNKNOWN - SNMP connection failed"; exit ${STATE_UNKNOWN};fi
 ############################################################################
 # Check Types
 case ${checktype} in
 
 info) # Displays information about this Infoblox appliance
-  model=$(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.4.0)
-  hwn=$(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.5.0)
-  systemsn=$(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.6.0)
-  softv=$(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.7.0)
+  model=$(snmpwalk ${snmp_param} -Oqv ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.4.0)
+  hwn=$(snmpwalk ${snmp_param} -Oqv ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.5.0)
+  systemsn=$(snmpwalk ${snmp_param} -Oqv ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.6.0)
+  softv=$(snmpwalk ${snmp_param} -Oqv ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.7.0)
   echo "System Name: $systemname, Infoblox Model: $model, HW ID: $hwn, SN: $systemsn, Software Version: $softv"
   exit ${STATE_OK}
 ;;
 
 ip) # Display configured ip addresses of this appliance
-  ipaddrs=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.2.1.4.20.1.1))
+  ipaddrs=($(snmpwalk ${snmp_param} -Oqv ${host} 1.3.6.1.2.1.4.20.1.1))
   if [[ -n $addarg ]]; then
     if [[ -z $(echo ${ipaddrs[*]} | grep $addarg) ]]; then
       echo "IP WARNING: Expected address $addarg not found. IP addresses configured: ${ipaddrs[*]}"
@@ -136,7 +160,7 @@ ip) # Display configured ip addresses of this appliance
 ;;
 
 cpu) # Checks the cpu utilization in percentage
-  usage=$(snmpwalk -v ${snmpv} -c ${snmpc} -Oqv ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.8.1)
+  usage=$(snmpwalk ${snmp_param} -Oqv ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.8.1)
 
   if [[ -n ${warning} ]] || [[ -n ${critical} ]]
   then # Check CPU utilization with thresholds
@@ -157,7 +181,7 @@ cpu) # Checks the cpu utilization in percentage
 ;;
 
 mem) # Checks the memory utilization in percentage
-  usage=$(snmpwalk -v ${snmpv} -c ${snmpc} -Oqv ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.8.2)
+  usage=$(snmpwalk ${snmp_param} -Oqv ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.8.2)
 
   if [[ -n ${warning} ]] || [[ -n ${critical} ]]
   then # Check memory utilization with thresholds
@@ -179,10 +203,10 @@ mem) # Checks the memory utilization in percentage
 
 replication) # Check the replication between Infoblox master/slave appliances
   # Replication status can only be checked if this host is "Active" in the grid
-  gridstatus=$(snmpwalk -v ${snmpv} -c ${snmpc} -Oqv ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.13 | sed "s/\"//g")
+  gridstatus=$(snmpwalk ${snmp_param} -Oqv ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.13 | sed "s/\"//g")
   if [[ "${gridstatus}" = "Active" ]]
   then
-    replstatus=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.2.1.2 | sed "s/\"//g"))
+    replstatus=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.2.1.2 | sed "s/\"//g"))
     # Determine which array index is offline
     r=0; for status in ${replstatus[*]}; do
       if [[ "${status}" = "Offline" ]]; then errorindex[${r}]=${r}; fi
@@ -191,8 +215,8 @@ replication) # Check the replication between Infoblox master/slave appliances
     if [[ ${#errorindex[*]} -gt 0 ]]
     then
       SAVEIFS=$IFS; IFS=$(echo -en "\n\b") # <- Do not use whitespace as split
-      replmembers=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.2.1.1))
-      repllast=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.2.1.4))
+      replmembers=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.2.1.1))
+      repllast=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.2.1.4))
       IFS=$SAVEIFS
       for f in ${errorindex[*]}; do
         failedmembers[${f}]=$(echo ${replmembers[$f]})
@@ -205,15 +229,15 @@ replication) # Check the replication between Infoblox master/slave appliances
       exit ${STATE_OK}
     fi
   else
-    systemsn=$(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.6.0)
+    systemsn=$(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.6.0)
     echo "REPLICATION UNKNOWN - This system (SN: ${systemsn}) is a passive grid member. Cannot verify replication. Try with HA IP address?"
     if [[ -n $ignoreunknown ]]; then exit ${STATE_OK}; else exit ${STATE_UNKNOWN}; fi
   fi
 ;;
 
 grid) # Check grid status
-  gridstatus=$(snmpwalk -v ${snmpv} -c ${snmpc} -Oqv ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.13 | sed "s/\"//g")
-  systemsn=$(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.6.0)
+  gridstatus=$(snmpwalk ${snmp_param} -Oqv ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.13 | sed "s/\"//g")
+  systemsn=$(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.6.0)
   if [[ -n $addarg ]] && ([[ "$addarg" = "Active" ]] || [[ "$addarg" = "Passive" ]]); then
     if [[ "$gridstatus" != "$addarg" ]]; then
       echo "GRID STATUS WARNING - This member (SN: $systemsn) is $gridstatus but expected $addarg"
@@ -239,14 +263,14 @@ dnsstat) # Get DNS statistics for a domain
   fi
 
   # DNS Stats can only be retrieved if this appliance is "Active" in the grid
-  gridstatus=$(snmpwalk -v ${snmpv} -c ${snmpc} -Oqv ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.13 | sed "s/\"//g")
-  systemsn=$(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.6.0)
+  gridstatus=$(snmpwalk ${snmp_param} -Oqv ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.13 | sed "s/\"//g")
+  systemsn=$(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.6.0)
   if [[ "${gridstatus}" = "Passive" ]]; then
     echo "DNS STATS UNKNOWN - This system (SN: ${systemsn}) is a passive grid member. DNS Stats only work on Active member."
     if [[ -n $ignoreunknown ]]; then exit ${STATE_OK}; else exit ${STATE_UNKNOWN}; fi
   fi
 
-  domainoid=$(snmpwalk -On -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.1 | grep \"${addarg}\"$ | awk '{print $1}'|awk -F ".1.3.6.1.4.1.7779.3.1.1.3.1.1.1.1" '{print $2}')
+  domainoid=$(snmpwalk -On ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.1 | grep \"${addarg}\"$ | awk '{print $1}'|awk -F ".1.3.6.1.4.1.7779.3.1.1.3.1.1.1.1" '{print $2}')
 
   if [[ -z $domainoid ]]; then
     echo "DNS STATS WARNING - Could not find domain $addarg"
@@ -254,24 +278,24 @@ dnsstat) # Get DNS statistics for a domain
   fi
 
   # Number of Successful responses since DNS process started
-  success=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.2${domainoid}))
+  success=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.2${domainoid}))
   # Number of DNS referrals since DNS process started
-  referral=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.3${domainoid}))
+  referral=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.3${domainoid}))
   # Number of DNS query received for non-existent record
-  nxrrset=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.4${domainoid}))
+  nxrrset=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.4${domainoid}))
   # Number of DNS query received for non-existent domain
-  nxdomain=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.5${domainoid}))
+  nxdomain=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.5${domainoid}))
   #Number of Queries received using recursion since DNS process started
-  recursion=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.6${domainoid}))
+  recursion=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.6${domainoid}))
   # Number of Failed queries since DNS process started
-  failure=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.7${domainoid}))
+  failure=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.7${domainoid}))
 
   echo "DNS STATS OK - $addarg Success: $success, Referral: $referral, NxRRset: $nxrrset, NxDomain: $nxdomain, Recursion: $recursion, Failure: $failure|${addarg}_success=$success;;;; ${addarg}_referral=$referral;;;; ${addarg}_nxrrset=$nxrrset;;;; ${addarg}_nxdomain=$nxdomain;;;; ${addarg}_recursion=$recursion;;;; ${addarg}_failure=$failure"
   exit ${STATE_OK}
 ;;
 
 temp) # Checks the temperature of the appliance (makes only sense in physical appliance, d'uh!)
-  temp=$(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.1.0 | sed "s/\"//g" | awk -F'[^0-9]*' '$0=$2')
+  temp=$(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.1.0 | sed "s/\"//g" | awk -F'[^0-9]*' '$0=$2')
 
   if [[ -n ${warning} ]] || [[ -n ${critical} ]]; then
     if [[ ${temp} -ge ${critical} ]]; then
@@ -292,30 +316,30 @@ temp) # Checks the temperature of the appliance (makes only sense in physical ap
 
 dhcpstat) # Get DHCP statistics for a domain
   # DHCP Stats can only be retrieved if this appliance is "Active" in the grid
-  gridstatus=$(snmpwalk -v ${snmpv} -c ${snmpc} -Oqv ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.13 | sed "s/\"//g")
-  systemsn=$(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.6.0)
+  gridstatus=$(snmpwalk ${snmp_param} -Oqv ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.13 | sed "s/\"//g")
+  systemsn=$(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.2.1.6.0)
   if [[ "${gridstatus}" = "Passive" ]]; then
     echo "DHCP STATS UNKNOWN - This system (SN: ${systemsn}) is a passive grid member. DHCP Stats only work on Active member."
     if [[ -n $ignoreunknown ]]; then exit ${STATE_OK}; else exit ${STATE_UNKNOWN}; fi
   fi
   # ibDhcpTotalNoOfDiscovers
-  discovers=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.1.0))
+  discovers=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.1.0))
   # ibDhcpTotalNoOfRequests
-  requests=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.2.0))
+  requests=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.2.0))
   #ibDhcpTotalNoOfReleases
-  releases=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.3.0))
+  releases=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.3.0))
   # ibDhcpTotalNoOfOffers
-  offers=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.4.0))
+  offers=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.4.0))
   #ibDhcpTotalNoOfAcks
-  acks=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.5.0))
+  acks=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.5.0))
   #ibDhcpTotalNoOfNacks
-  nacks=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.6.0))
+  nacks=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.6.0))
   # ibDhcpTotalNoOfDeclines
-  declines=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.7.0))
+  declines=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.7.0))
   # ibDhcpTotalNoOfInforms
-  informs=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.8.0))
+  informs=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.8.0))
   # ibDhcpTotalNoOfOthers
-  others=($(snmpwalk -Oqv -v ${snmpv} -c ${snmpc} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.9.0))
+  others=($(snmpwalk -Oqv ${snmp_param} ${host} 1.3.6.1.4.1.7779.3.1.1.4.1.3.9.0))
 
   echo "DHCP STATS OK - $addarg Discovers: $discovers, Requests: $requests, Releases: $releases, Offers: $offers, Acks: $acks, Nacks: $nacks, Declines: $declines, Informs: $informs, Other: $other|discovers=$discovers; requests=$requests; releases=$releases; offers=$offers; acks=$acks nacks=$nacks; declines=$declines; informs=$informs others=$others"
   exit ${STATE_OK}
