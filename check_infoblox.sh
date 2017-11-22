@@ -27,24 +27,24 @@ check_infoblox (c) 2015-$(date +%Y) Claudio Kuenzler (published under GPLv2 lice
 
 Usage:
 SNMPv2c: ./check_infoblox -H host -V 2c -C community -t type [-a argument] [-w warning] [-c critical]
-SNMPv3 : ./check_infoblox -H host -V 3 -l {login} -b SHA -B {auth_pass} -x AES -X {priv_pass} -t type [-a argument] [-w warning] [-c critical]
+SNMPv3 : ./check_infoblox -H host -V 3 -l {authLevel} -u {login} -b SHA -B {auth_pass} -x AES -X {priv_pass} -t type [-a argument] [-w warning] [-c critical]
 
 Options:
 ------------
 -H Hostname
--V SNMP Version to use (currently only 2c|3 is supported)
+-V SNMP Version to use (currently 2c|3 is supported)
 -C SNMP Community (default: public)
+-l SNMPv3 auth Level (noAuthNoPriv|authNoPriv|authPriv)
+-u Login User for SNMPv3
+-a Authentication Protocol (MD5|SHA) for SNMPv3
+-A Authentication Passwort for SNMPv3
+-x Privacy Protocol (DES|AES) for SNMPv3
+-X Privacy Passwort for SNMPv3
 -t Type to check
 -r Additional arguments for certain checks
 -w Warning Threshold (optional)
 -c Critical Threshold (optional)
 -i Ignore Unknown Status (for 'replication' and 'dnsstat' checks)
--a Authentication Protocol (MD5|SHA) for SNMPv3
--A Authentication Passwort for SNMPv3
--x Privacy Protocol (DES|AES) for SNMPv3
--X Privacy Passwort for SNMPv3
--l Login User for SNMPv3
-
 -h This help text
 
 Check Types:
@@ -71,22 +71,23 @@ exit ${STATE_UNKNOWN}
 if [[ "$1" = "--help" ]] || [[ ${#} -eq 0 ]]; then help; fi
 
 # Get Opts
-while getopts "H:V:C:t:r:w:c:ia:A:x:X:l:h" Input;
+while getopts "H:V:C:l:u:a:A:x:X:t:r:w:c:ih" Input;
 do
   case ${Input} in
     H) host=${OPTARG};;
     V) snmpv=${OPTARG};;
     C) snmpc=${OPTARG};;
+    l) authlevel=${OPTARG};;
+    u) authuser=${OPTARG};;
+    a) authproto=${OPTARG};;
+    A) authpass=${OPTARG};;
+    x) privproto=${OPTARG};;
+    X) privpass=${OPTARG};;
     t) checktype=${OPTARG};;
     r) addarg=${OPTARG};;
     w) warning=${OPTARG};;
     c) critical=${OPTARG};;
     i) ignoreunknown=true;;
-    a) authproto=${OPTARG};;
-    A) authpass=${OPTARG};;
-    x) privproto=${OPTARG};;
-    X) privpass=${OPTARG};;
-    l) login=${OPTARG};;
     h) help;;
     *) echo "Wrong option given. Use -h to check out help."; exit ${STATE_UNKNOWN};;
 
@@ -115,12 +116,28 @@ case "$snmpv" in
     snmp_param="-v ${snmpv} -c ${snmpc}"
     ;;
   "3")
-    if [[ -z $login ]]; then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
-    if [[ -z $authproto ]]; then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
-    if [[ -z $authpass ]]; then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
-    if [[ -z $privproto ]]; then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
-    if [[ -z $privpass ]]; then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
-    snmp_param="-v ${snmpv} -l ${login} -a ${authproto} -A ${authpass} -x ${privproto} -X ${privpass}"
+    if [[ -z $authlevel ]]; then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
+    if [[ -z $authuser ]];  then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
+    case "$authlevel" in
+      "noAuthNoPriv")
+        snmp_param="-v ${snmpv} -l ${authlevel} -u ${authuser}"
+        ;;
+      "authNoPriv")
+        if [[ -z $authproto ]]; then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
+        if [[ -z $authpass ]];  then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
+        snmp_param="-v ${snmpv} -l ${authlevel} -u ${authuser} -a ${authproto} -A ${authpass}"
+        ;;
+      "authPriv")
+        if [[ -z $authproto ]]; then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
+        if [[ -z $authpass ]];  then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
+        if [[ -z $privproto ]]; then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
+        if [[ -z $privpass ]];  then echo "UNKNOWN - Missing required option. Use -h to check out help."; exit ${STATE_UNKNOWN}; fi
+        snmp_param="-v ${snmpv} -l ${authlevel} -u ${authuser} -a ${authproto} -A ${authpass} -x ${privproto} -X ${privpass}"
+        ;;
+      "*")
+        echo "UNKNOWN - Sorry, only authLevel (noAuthNoPriv|authNoPriv|authPriv) allowed"; exit ${STATE_UNKNOWN};
+        ;;
+    esac
     ;;
   "*")
     echo "UNKNOWN - Sorry, snmp version 2c|3 allowed"; exit ${STATE_UNKNOWN};
