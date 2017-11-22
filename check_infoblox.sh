@@ -140,7 +140,7 @@ case "$snmpv" in
     esac
     ;;
   "*")
-    echo "UNKNOWN - Sorry, snmp version 2c|3 allowed"; exit ${STATE_UNKNOWN};
+    echo "UNKNOWN - Sorry, only snmp version 2c|3 allowed"; exit ${STATE_UNKNOWN};
     ;;
 esac
 
