@@ -26,8 +26,8 @@ echo -ne "
 check_infoblox (c) 2015-$(date +%Y) Claudio Kuenzler (published under GPLv2 licence)
 
 Usage:
-SNMPv2c: ./check_infoblox -H host -V 2c -C community -t type [-a argument] [-w warning] [-c critical]
-SNMPv3 : ./check_infoblox -H host -V 3 -l {authLevel} -u {login} -b SHA -B {auth_pass} -x AES -X {priv_pass} -t type [-a argument] [-w warning] [-c critical]
+SNMPv2c: ./check_infoblox -H host -V 2c -C community -t type [-r argument] [-w warning] [-c critical]
+SNMPv3 : ./check_infoblox -H host -V 3 -l {authLevel} -u {login} -b SHA -B {auth_pass} -x AES -X {priv_pass} -t type [-r argument] [-w warning] [-c critical]
 
 Options:
 ------------
@@ -55,7 +55,7 @@ replication -> Check if replication between Infoblox appliances is working
 grid -> Check if appliance is Active or Passive in grid (additional argument possible)
 info -> Display general information about this appliance
 ip -> Display configured ip addresses of this appliance (additional argument possible to check for a certain address)
-dnsstat -> Display DNS statistics for domain (use in combination with -a domain)
+dnsstat -> Display DNS statistics for domain (use in combination with -r domain)
 dhcpstat -> Display DHCP statistics
 
 Additional Arguments:
@@ -275,7 +275,7 @@ grid) # Check grid status
 dnsstat) # Get DNS statistics for a domain
   # Need domain name as additional argument
   if [[ -z $addarg ]]; then
-    echo "No domain name given. Please use '-a domain' in combination with dnsstat check."
+    echo "No domain name given. Please use '-r domain' in combination with dnsstat check."
     exit ${STATE_UNKNOWN}
   fi
 
